@@ -116,8 +116,15 @@ fn parse_dictionary(input: &[u8]) -> nom::IResult<&[u8], HashMap<&[u8], BEncoded
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nom::Err::Error;
     use nom::error::ErrorKind;
+
+    fn nom_error<T>(remaining: &[u8], kind: nom::error::ErrorKind) -> nom::IResult<&[u8], T> {
+        Err(nom::Err::Error(nom::error::Error::new(remaining, kind)))
+    }
+
+    fn nom_failure<T>(remaining: &[u8], kind: nom::error::ErrorKind) -> nom::IResult<&[u8], T> {
+        Err(nom::Err::Failure(nom::error::Error::new(remaining, kind)))
+    }
 
     mod parse_primitive {
         use super::*;
@@ -156,7 +163,6 @@ mod tests {
 
     mod parse_dictionary {
         use super::*;
-        use core::panicking::assert_failed;
 
         #[test]
         fn single_entry() {
@@ -202,8 +208,7 @@ mod tests {
         #[test]
         fn non_string_key() {
             let buf = b"di12ei99ee";
-            let expected: (&[u8], _) = (b"i12ei99ee", ErrorKind::Tag);
-            assert_eq!(parse_dictionary(buf), Err(Error(expected)));
+            assert_eq!(parse_dictionary(buf), nom_failure(b"i12ei99ee", ErrorKind::Tag));
         }
     }
 
@@ -256,14 +261,13 @@ mod tests {
         #[test]
         fn doesnt_parse_badly_identified_integer() {
             let buf: &[u8] = b"55e";
-            assert_eq!(parse_int(buf), Err(Error((buf, ErrorKind::Tag))));
+            assert_eq!(parse_int(buf), nom_error(buf, ErrorKind::Tag));
         }
 
         #[test]
         fn doesnt_parse_zero_padded_integer() {
             let buf = b"i032e";
-            let expected: (&[u8], _) = (b"032e", ErrorKind::OneOf);
-            assert_eq!(parse_int(buf), Err(Error(expected)));
+            assert_eq!(parse_int(buf), nom_failure(b"032e", ErrorKind::OneOf));
         }
 
         #[test]
@@ -287,15 +291,15 @@ mod tests {
         #[test]
         fn fails_on_non_string() {
             let buf = b"i32";
-            let expected: (&[u8], _) = (b"i32", ErrorKind::Digit);
-            assert_eq!(parse_str(buf), Err(Error(expected)));
+            assert_eq!(parse_str(buf), nom_error(b"i32", ErrorKind::Digit));
         }
+
+
 
         #[test]
         fn fails_on_short_string() {
             let buf = b"23:foobar";
-            let expected: (&[u8], _) = (b"foobar", ErrorKind::Eof);
-            assert_eq!(parse_str(buf), Err(Error(expected)));
+            assert_eq!(parse_str(buf), nom_failure(b"foobar", ErrorKind::Eof));
         }
     }
 }
