@@ -1,11 +1,14 @@
 use anyhow::Result;
+use std::env;
 use std::fs::File;
 use std::io::Read;
 
 mod bencode;
+mod metadata;
 
 fn main() -> Result<()> {
-    let mut file = File::open("./test.torrent").unwrap();
+    let filename = env::args().skip(1).next().unwrap();
+    let mut file = File::open(&filename).unwrap();
     let mut contents = vec![];
     file.read_to_end(&mut contents).unwrap();
     let decoded = bencode::decode(&contents)?;
@@ -18,5 +21,14 @@ fn main() -> Result<()> {
         let sub = info.dict_get(k)?;
         println!("Type of {k} is {}", sub.type_str());
     }
+
+    println!();
+    println!();
+    println!();
+    let meta = metadata::Metadata::parse(&contents);
+    println!("Metadata: {:?}", meta);
+
+    println!("The whole thing: {:#?}", decoded);
+
     Ok(())
 }

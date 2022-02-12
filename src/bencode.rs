@@ -39,6 +39,22 @@ impl<'a> BEncodedType<'a> {
         }
     }
 
+    pub fn as_str(&self) -> Result<&'a str> {
+        if let BEncodedType::String(ref x) = self {
+            str::from_utf8(x).or_else(|e| Err(anyhow!("UTF-8 decoding error: {:?}", e)))
+        } else {
+            Err(anyhow!("Type is {}, not a string", self.type_str()))
+        }
+    }
+
+    pub fn as_str_bytes(&self) -> Result<&'a [u8]> {
+        if let BEncodedType::String(ref x) = self {
+            Ok(x)
+        } else {
+            Err(anyhow!("Type is {}, not a string", self.type_str()))
+        }
+    }
+
     pub fn dict_keys(&self) -> Result<Vec<&'a str>> {
         // if !matches(self, &BEncodedType::Dictionary) {
         // }
@@ -65,7 +81,13 @@ impl Debug for BEncodedType<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self {
             &BEncodedType::String(ref x) => {
-                let parsed = String::from_utf8_lossy(x);
+                let parsed = std::str::from_utf8(x)
+                    .map(|y| y.to_owned())
+                    .unwrap_or_else(|_e| {
+                        x.into_iter()
+                            .map(|y| format!("{:02X?}", y))
+                            .collect::<String>()
+                    });
                 f.write_str(&parsed)
             }
             &BEncodedType::Integer(ref x) => f.write_str(&format!("{}", x)),
