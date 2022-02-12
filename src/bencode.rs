@@ -1,28 +1,64 @@
-use std::collections::HashMap;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use nom::lib::std::fmt::Formatter;
 use nom::{
     branch::alt,
-    combinator::{peek, map_res, verify, map, value, opt},
-    character::complete::{digit1, one_of},
-    sequence::{tuple, preceded, terminated, pair},
     bytes::complete::{tag, take},
+    character::complete::{digit1, one_of},
+    combinator::{map, map_res, opt, peek, value, verify},
     multi::many0,
+    sequence::{pair, preceded, terminated, tuple},
 };
+use std::collections::HashMap;
 use std::fmt::Debug;
-use nom::lib::std::fmt::Formatter;
+use std::str;
 
-pub fn decode(bencoded_str: &[u8]) {
+pub fn decode(bencoded_str: &[u8]) -> Result<BEncodedType> {
     let (rest, parsed) = parse_primitive(bencoded_str).unwrap();
-    println!("Found this!\n{:#?}", parsed);
-    println!("And the rest: {:?}", rest);
+
+    if rest.len() > 0 {
+        return Err(anyhow!("File has trailing data: {:?}", rest));
+    }
+    return Ok(parsed);
 }
 
 #[derive(PartialEq)]
-enum BEncodedType<'a> {
+pub enum BEncodedType<'a> {
     String(&'a [u8]),
     Integer(i64),
     List(Vec<BEncodedType<'a>>),
     Dictionary(HashMap<&'a [u8], BEncodedType<'a>>),
+}
+
+impl<'a> BEncodedType<'a> {
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            &Self::String(_) => "String",
+            &Self::Integer(_) => "Integer",
+            &Self::List(_) => "List",
+            &Self::Dictionary(_) => "Dictionary",
+        }
+    }
+
+    pub fn dict_keys(&self) -> Result<Vec<&'a str>> {
+        // if !matches(self, &BEncodedType::Dictionary) {
+        // }
+        if let BEncodedType::Dictionary(ref x) = self {
+            x.into_iter()
+                .map(|(&key, _value)| str::from_utf8(key).or(Err(anyhow!("UTF-8 decoding error"))))
+                .collect()
+        } else {
+            return Err(anyhow!("Not a dictionary"));
+        }
+    }
+
+    pub fn dict_get(&self, key: &str) -> Result<&BEncodedType<'a>> {
+        if let BEncodedType::Dictionary(ref x) = self {
+            x.get(key.as_bytes())
+                .ok_or_else(|| anyhow!("Key not found"))
+        } else {
+            Err(anyhow!("Not a dictionary"))
+        }
+    }
 }
 
 impl Debug for BEncodedType<'_> {
@@ -31,7 +67,7 @@ impl Debug for BEncodedType<'_> {
             &BEncodedType::String(ref x) => {
                 let parsed = String::from_utf8_lossy(x);
                 f.write_str(&parsed)
-            },
+            }
             &BEncodedType::Integer(ref x) => f.write_str(&format!("{}", x)),
             &BEncodedType::List(ref x) => f.debug_list().entries(x).finish(),
             &BEncodedType::Dictionary(ref x) => {
@@ -42,19 +78,22 @@ impl Debug for BEncodedType<'_> {
                     fmt_mapper.value(pair.1);
                 }
                 fmt_mapper.finish()
-            },
+            }
         }
     }
 }
 
 fn string_from_digit(input: &[u8]) -> Result<&str> {
-    std::str::from_utf8(input)
-        .map_err(|e| anyhow!("Error during bytes to string parsing: {:?}", e))
+    std::str::from_utf8(input).map_err(|e| anyhow!("Error during bytes to string parsing: {:?}", e))
 }
 
-fn from_digit<T: std::str::FromStr>(input: &[u8]) -> Result<T> where <T as std::str::FromStr>::Err: std::fmt::Debug {
+fn from_digit<T: std::str::FromStr>(input: &[u8]) -> Result<T>
+where
+    <T as std::str::FromStr>::Err: std::fmt::Debug,
+{
     let buf = string_from_digit(input)?;
-    buf.parse::<T>().map_err(|e| anyhow!("Error during string to digit parsing: {:?}", e))
+    buf.parse::<T>()
+        .map_err(|e| anyhow!("Error during string to digit parsing: {:?}", e))
 }
 
 fn non_zero_signed_digit1(input: &[u8]) -> nom::IResult<&[u8], i64> {
@@ -75,15 +114,14 @@ fn parse_primitive(input: &[u8]) -> nom::IResult<&[u8], BEncodedType> {
     let str_parser = map(parse_str, |x: &[u8]| BEncodedType::String(x));
     let int_parser = map(parse_int, |x: i64| BEncodedType::Integer(x));
     let list_parser = map(parse_list, |x: Vec<BEncodedType>| BEncodedType::List(x));
-    let dict_parser = map(parse_dictionary, |x: HashMap<&[u8], BEncodedType>| BEncodedType::Dictionary(x));
+    let dict_parser = map(parse_dictionary, |x: HashMap<&[u8], BEncodedType>| {
+        BEncodedType::Dictionary(x)
+    });
     alt((str_parser, int_parser, list_parser, dict_parser))(input)
 }
 
 fn parse_str(input: &[u8]) -> nom::IResult<&[u8], &[u8]> {
-    let (suffix, (len, _)) = tuple((
-        map_res(digit1, from_digit::<usize>),
-        tag(":")
-    ))(input)?;
+    let (suffix, (len, _)) = tuple((map_res(digit1, from_digit::<usize>), tag(":")))(input)?;
 
     take(len)(suffix)
 }
@@ -146,7 +184,8 @@ mod tests {
         #[test]
         fn list() {
             let buf = b"li14ee";
-            let expected: (&[u8], BEncodedType) = (b"", BEncodedType::List(vec![BEncodedType::Integer(14)]));
+            let expected: (&[u8], BEncodedType) =
+                (b"", BEncodedType::List(vec![BEncodedType::Integer(14)]));
             assert_eq!(parse_primitive(buf), Ok(expected))
         }
 
@@ -199,7 +238,7 @@ mod tests {
                 BEncodedType::List(vec![
                     BEncodedType::String(b"uuchi"),
                     BEncodedType::String(b"jigoku"),
-                ])
+                ]),
             );
             let expected_wrapper: (&[u8], _) = (b"", expected);
             assert_eq!(parse_dictionary(buf), Ok(expected_wrapper))
@@ -208,7 +247,10 @@ mod tests {
         #[test]
         fn non_string_key() {
             let buf = b"di12ei99ee";
-            assert_eq!(parse_dictionary(buf), nom_failure(b"i12ei99ee", ErrorKind::Tag));
+            assert_eq!(
+                parse_dictionary(buf),
+                nom_failure(b"i12ei99ee", ErrorKind::Tag)
+            );
         }
     }
 
@@ -218,7 +260,10 @@ mod tests {
         #[test]
         fn multiple_integers() {
             let buf = b"li12ei-17ee";
-            let expected: (&[u8], _) = (b"", vec![BEncodedType::Integer(12), BEncodedType::Integer(-17)]);
+            let expected: (&[u8], _) = (
+                b"",
+                vec![BEncodedType::Integer(12), BEncodedType::Integer(-17)],
+            );
             assert_eq!(parse_list(buf), Ok(expected));
         }
 
@@ -232,7 +277,10 @@ mod tests {
         #[test]
         fn hybrid_list() {
             let buf = b"li18e5:helloe";
-            let expected: (&[u8], _) = (b"", vec![BEncodedType::Integer(18), BEncodedType::String(b"hello")]);
+            let expected: (&[u8], _) = (
+                b"",
+                vec![BEncodedType::Integer(18), BEncodedType::String(b"hello")],
+            );
             assert_eq!(parse_list(buf), Ok(expected));
         }
 
@@ -241,8 +289,11 @@ mod tests {
             let buf = b"li12el4:fizz4:buzze3:baze";
             let expected = vec![
                 BEncodedType::Integer(12),
-                BEncodedType::List(vec![BEncodedType::String(b"fizz"), BEncodedType::String(b"buzz")]),
-                BEncodedType::String(b"baz")
+                BEncodedType::List(vec![
+                    BEncodedType::String(b"fizz"),
+                    BEncodedType::String(b"buzz"),
+                ]),
+                BEncodedType::String(b"baz"),
             ];
             let expected_wrapper: (&[u8], _) = (b"", expected);
             assert_eq!(parse_list(buf), Ok(expected_wrapper));
@@ -293,8 +344,6 @@ mod tests {
             let buf = b"i32";
             assert_eq!(parse_str(buf), nom_error(b"i32", ErrorKind::Digit));
         }
-
-
 
         #[test]
         fn fails_on_short_string() {
